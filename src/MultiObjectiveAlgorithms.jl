@@ -339,6 +339,18 @@ struct EpsilonConstraintStep <: AbstractAlgorithmAttribute end
 default(::EpsilonConstraintStep) = 1.0
 
 """
+    AugmeconDelta <: AbstractAlgorithmAttribute -> Float64
+
+The augmentation factor `δ` to use in augmented epsilon-constraint methods.
+
+Defaults to `1e-3`.
+"""
+struct AugmeconDelta <: AbstractAlgorithmAttribute end
+
+default(::AugmeconDelta) = 1e-3
+
+
+"""
     LexicographicAllPermutations <: AbstractAlgorithmAttribute -> Bool
 
 Controls whether to return the lexicographic solution for all permutations of
