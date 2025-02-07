@@ -5,42 +5,29 @@ Implements the augmented epsilon-constraint method (AUGMECON) for bi-objective o
 
 ## Supported optimizer attributes
 
-- `MOA.EpsilonConstraintStep()`: Step size for partitioning the first objective's domain.
-- `MOA.SolutionLimit()`: Maximum number of solutions to generate.
-- `MOA.AugmentationFactor()`: Weight (δ) for the secondary objective term (default: 1e-3).
+- `MOA.GridPoints()`: Number of grid points to use in the grid search.
+- `MOA.AugmeconDelta()`: Weight (δ) for the secondary objective term (default: 1e-3).
 """
 mutable struct AugmentedEpsilonConstraint <: AbstractAlgorithm
-    solution_limit::Union{Nothing,Int}
-    atol::Union{Nothing,Float64}
-    delta::Float64  # Augmentation factor (δ)
+    grid_points::Union{Nothing,Int}
+    delta::Union{Nothing,Float64} # Penalty factor for slack variables
+    slack_vars::Vector{MOI.VariableIndex}  # Slack variables for equality constraints
 
-    AugmentedEpsilonConstraint() = new(nothing, nothing, 1e-3)
+    AugmentedEpsilonConstraint() = new(nothing, nothing, MOI.VariableIndex[])
 end
 
-MOI.supports(::AugmentedEpsilonConstraint, ::SolutionLimit) = true
+MOI.supports(::AugmentedEpsilonConstraint, ::GridPoints) = true
 
-function MOI.set(alg::AugmentedEpsilonConstraint, ::SolutionLimit, value)
-    alg.solution_limit = value
+function MOI.set(alg::AugmentedEpsilonConstraint, ::GridPoints, value)
+    alg.grid_points = value
     return
 end
 
-function MOI.get(alg::AugmentedEpsilonConstraint, attr::SolutionLimit)
-    return something(alg.solution_limit, default(alg, attr))
+function MOI.get(alg::AugmentedEpsilonConstraint, attr::GridPoints)
+    return something(alg.grid_points, default(alg, attr))
 end
 
-MOI.supports(::AugmentedEpsilonConstraint, ::EpsilonConstraintStep) = true
-
-function MOI.set(alg::AugmentedEpsilonConstraint, ::EpsilonConstraintStep, value)
-    alg.atol = value
-    return
-end
-
-function MOI.get(alg::AugmentedEpsilonConstraint, attr::EpsilonConstraintStep)
-    return something(alg.atol, default(alg, attr))
-end
-
-# Add support for AugmentationFactor
-MOI.supports(::AugmentedEpsilonConstraint, ::MOI.AbstractOptimizerAttribute) = false  # Restrict to supported attributes
+MOI.supports(::AugmentedEpsilonConstraint, ::AugmeconDelta) = true
 
 function MOI.set(alg::AugmentedEpsilonConstraint, ::AugmeconDelta, value)
     alg.delta = value
@@ -49,19 +36,6 @@ end
 
 function MOI.get(alg::AugmentedEpsilonConstraint, attr::AugmeconDelta)
     return something(alg.delta, default(alg, attr))
-end
-
-MOI.supports(::AugmentedEpsilonConstraint, ::ObjectiveAbsoluteTolerance) = true
-
-function MOI.set(alg::AugmentedEpsilonConstraint, ::ObjectiveAbsoluteTolerance, value)
-    @warn("This attribute is deprecated. Use `EpsilonConstraintStep` instead.")
-    MOI.set(alg, EpsilonConstraintStep(), value)
-    return
-end
-
-function MOI.get(alg::AugmentedEpsilonConstraint, ::ObjectiveAbsoluteTolerance)
-    @warn("This attribute is deprecated. Use `EpsilonConstraintStep` instead.")
-    return MOI.get(alg, EpsilonConstraintStep())
 end
 
 function optimize_multiobjective!(
@@ -73,75 +47,97 @@ function optimize_multiobjective!(
         error("AugmentedEpsilonConstraint requires exactly two objectives")
     end
 
-    # Compute objective bounds
-    alg = Hierarchical()
-    MOI.set.(Ref(alg), ObjectivePriority.(1:2), [1, 0])
-    status, solution_1 = optimize_multiobjective!(alg, model)
+    original_sense = MOI.get(model.inner, MOI.ObjectiveSense())
+    convert_min_to_max!(model)
+
+    # Determine payoff table using lexicographic method
+    payoff_table = Matrix{Float64}(undef, 2, 2)
+    alg = Lexicographic()
+    MOI.set(alg, LexicographicAllPermutations(), true)
+    status, solutions = optimize_multiobjective!(alg, model)
     !_is_scalar_status_optimal(status) && return status, nothing
 
-    MOI.set(alg, ObjectivePriority(2), 2)
-    status, solution_2 = optimize_multiobjective!(alg, model)
-    !_is_scalar_status_optimal(status) && return status, nothing
-
-    a, b = solution_1[1].y[1], solution_2[1].y[1]
-    left, right = min(a, b), max(a, b)
-
-    # Compute ε-step
-    ε = MOI.get(algorithm, EpsilonConstraintStep())
-    n_points = MOI.get(algorithm, SolutionLimit())
-    if n_points != default(algorithm, SolutionLimit())
-        ε = abs(right - left) / (n_points - 1)
+    for (i, solution) in enumerate(solutions)
+        payoff_table[1, i] = solution.y[1]
+        payoff_table[2, i] = solution.y[2]
     end
 
-    f1, f2 = MOI.Utilities.eachscalar(model.f)
-    r1 = right - left
-    r1 = r1 ≈ 0.0 ? 1.0 : r1  # Handle zero range
-    δ = algorithm.delta
-    T = Float64
+    n_points = MOI.get(algorithm, GridPoints())
+    delta = MOI.get(algorithm, AugmeconDelta())
+    sense = MOI.get(model.inner, MOI.ObjectiveSense())
 
-    # Create augmented objective: f2 + δ*(f1/r1)
-    scaled_f1 = MOI.Utilities.operate(*, typeof(δ/r1), δ/r1, f1)
-    augmented_obj = MOI.Utilities.operate(+, T, f2, scaled_f1)
+    # Convert to maximization and determine epsilon range
+    if sense == MOI.MIN_SENSE
+        # Original problem is minimization; convert objectives to maximization
+        f1_orig, f2_orig = MOI.Utilities.eachscalar(model.f)
+        f1 = MOI.Utilities.operate!(*, Float64, -1.0, f1_orig)
+        f2 = MOI.Utilities.operate!(*, Float64, 1.0, f2_orig)
+        # Payoff table values are original (minimization) objectives
+        epsilon_min = -min(payoff_table[2, 1], payoff_table[2, 2])  # Convert to maximization's f2'
+        epsilon_max = -max(payoff_table[2, 1], payoff_table[2, 2])
+    else
+        f1, f2 = MOI.Utilities.eachscalar(model.f)
+        epsilon_min = min(payoff_table[2, 1], payoff_table[2, 2])
+        epsilon_max = max(payoff_table[2, 1], payoff_table[2, 2])
+    end
 
+    r = abs(epsilon_max - epsilon_min)
+    epsilon_step = r / (n_points - 1)
+    current_epsilon = epsilon_min 
+
+    # Add slack variable
+    slack = MOI.add_variable(model.inner)
+    MOI.add_constraint(model.inner, slack, MOI.GreaterThan(0.0))
+
+    # Create augmented objective: f1 + (delta / r) * slack
+    scaled_slack = MOI.Utilities.operate!(*, Float64, delta / r, slack)
+    augmented_obj = sense == MOI.MIN_SENSE ? MOI.Utilities.operate!(-, Float64, f1, scaled_slack) : MOI.Utilities.operate!(+, Float64, f1, scaled_slack)
     MOI.set(model.inner, MOI.ObjectiveFunction{typeof(augmented_obj)}(), augmented_obj)
 
-    # Iterate with epsilon constraints
-    solutions = SolutionPoint[]
-    sense = MOI.get(model.inner, MOI.ObjectiveSense())
-    variables = MOI.get(model.inner, MOI.ListOfVariableIndices())
-    SetType, bound = sense == MOI.MIN_SENSE ? 
-        (MOI.LessThan{Float64}, right) : (MOI.GreaterThan{Float64}, left)
-    
-    constant = MOI.constant(f1, Float64)
-    ci = MOI.Utilities.normalize_and_add_constraint(
-        model,
-        f1,
-        SetType(bound);
-        allow_modify_function=true,
-    )
-    bound -= constant
+    # Add epsilon constraint: f2 - slack == epsilon (for maximization)
+    constraint_func = sense == MOI.MIN_SENSE ? MOI.Utilities.operate(+, Float64, f2, slack) : MOI.Utilities.operate(-, Float64, f2, slack)
+    ci = MOI.add_constraint(model.inner, constraint_func, MOI.EqualTo(current_epsilon))
 
-    status = MOI.OPTIMAL
-    for _ in 1:n_points
+    solutions = SolutionPoint[]
+    variables = MOI.get(model.inner, MOI.ListOfVariableIndices())
+
+    for i in 1:n_points
         _time_limit_exceeded(model, start_time) && (status = MOI.TIME_LIMIT; break)
         
-        MOI.set(model, MOI.ConstraintSet(), ci, SetType(bound))
+        MOI.set(model.inner, MOI.ConstraintSet(), ci, MOI.EqualTo(current_epsilon))
         MOI.optimize!(model.inner)
-        !_is_scalar_status_optimal(model) && break
+        
+        if !_is_scalar_status_optimal(model)
+            break
+        end
 
         X, Y = _compute_point(model, variables, model.f)
+        if original_sense == MOI.MIN_SENSE
+            Y .= -Y
+        end
+
+        # Check if this solution is non-dominated
         if isempty(solutions) || !(Y ≈ solutions[end].y)
             push!(solutions, SolutionPoint(X, Y))
         end
 
-        # Update bound
-        adjustment = sense == MOI.MIN_SENSE ? (Y[1] - constant - ε) : (Y[1] - constant + ε)
-        bound = sense == MOI.MIN_SENSE ? 
-            min(adjustment, bound - ε) : 
-            max(adjustment, bound + ε)
+        current_epsilon = current_epsilon + epsilon_step + MOI.get(model.inner, MOI.VariablePrimal(), slack)
     end
-    MOI.delete(model, ci)
 
-    #return status, filter_nondominated(sense, solutions)
+    MOI.delete(model.inner, ci)
+    #MOI.delete(model, slack)
     return status, solutions
+end
+
+function convert_min_to_max!(model::MOI.AbstractOptimizer)
+    sense = MOI.get(model, MOI.ObjectiveSense())
+    
+    if sense == MOI.MIN_SENSE
+        MOI.set(model, MOI.ObjectiveSense(), MOI.MAX_SENSE)
+        
+        # Negate the objective function to maintain the same optimization problem
+        obj_func = MOI.get(model, MOI.ObjectiveFunction{MOI.ScalarAffineFunction{Float64}}())
+        neg_obj_func = MOI.Utilities.operate!(*, Float64, -1.0, obj_func)
+        MOI.set(model, MOI.ObjectiveFunction{typeof(neg_obj_func)}(), neg_obj_func)
+    end
 end

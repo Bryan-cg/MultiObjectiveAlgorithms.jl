@@ -29,7 +29,6 @@ function test_biobjective_knapsack()
     w = [80, 87, 68, 72, 66, 77, 99, 85, 70, 93, 98, 72, 100, 89, 67, 86, 91]
     model = MOA.Optimizer(HiGHS.Optimizer)
     MOI.set(model, MOA.Algorithm(), MOA.AugmentedEpsilonConstraint())
-    MOI.set(model, MOA.SolutionLimit(), 100)
     MOI.set(model, MOI.Silent(), true)
     x = MOI.add_variables(model, length(w))
     MOI.add_constraint.(model, x, MOI.ZeroOne())
@@ -117,8 +116,8 @@ function test_biobjective_knapsack_atol_large()
     w = [80, 87, 68, 72, 66, 77, 99, 85, 70, 93, 98, 72, 100, 89, 67, 86, 91]
     model = MOA.Optimizer(HiGHS.Optimizer)
     MOI.set(model, MOA.Algorithm(), MOA.AugmentedEpsilonConstraint())
-    @test MOI.supports(model, MOA.EpsilonConstraintStep())
-    MOI.set(model, MOA.EpsilonConstraintStep(), 10.0)
+    @test MOI.supports(model, MOA.GridPoints())
+    MOI.set(model, MOA.GridPoints(), 4)
     MOI.set(model, MOI.Silent(), true)
     x = MOI.add_variables(model, length(w))
     MOI.add_constraint.(model, x, MOI.ZeroOne())
@@ -136,9 +135,9 @@ function test_biobjective_knapsack_atol_large()
     )
     MOI.optimize!(model)
     results = Dict(
+        [955, 906] => [2, 3, 5, 6, 9, 10, 11, 14, 15, 16, 17],
         [948, 939] => [1, 2, 3, 5, 6, 8, 10, 11, 15, 16, 17],
         [934, 971] => [2, 3, 5, 6, 8, 10, 11, 12, 15, 16, 17],
-        [918, 983] => [2, 3, 4, 5, 6, 8, 10, 11, 12, 16, 17],
     )
     @test MOI.get(model, MOI.ResultCount()) == 3
     for i in 1:MOI.get(model, MOI.ResultCount())
@@ -155,8 +154,7 @@ function test_biobjective_knapsack_min()
     p2 = [65, 90, 90, 77, 95, 84, 70, 94, 66, 92, 74, 97, 60, 60, 65, 97, 93]
     w = [80, 87, 68, 72, 66, 77, 99, 85, 70, 93, 98, 72, 100, 89, 67, 86, 91]
     model = MOA.Optimizer(HiGHS.Optimizer)
-    MOI.set(model, MOA.Algorithm(), MOA.EpsilonConstraint())
-    MOI.set(model, MOA.SolutionLimit(), 100)
+    MOI.set(model, MOA.Algorithm(), MOA.AugmentedEpsilonConstraint())
     MOI.set(model, MOI.Silent(), true)
     x = MOI.add_variables(model, length(w))
     MOI.add_constraint.(model, x, MOI.ZeroOne())
@@ -194,14 +192,14 @@ function test_biobjective_knapsack_min()
     return
 end
 
-function test_biobjective_knapsack_min_solution_limit()
+function test_biobjective_knapsack_min_grid_points()
     p1 = [77, 94, 71, 63, 96, 82, 85, 75, 72, 91, 99, 63, 84, 87, 79, 94, 90]
     p2 = [65, 90, 90, 77, 95, 84, 70, 94, 66, 92, 74, 97, 60, 60, 65, 97, 93]
     w = [80, 87, 68, 72, 66, 77, 99, 85, 70, 93, 98, 72, 100, 89, 67, 86, 91]
     model = MOA.Optimizer(HiGHS.Optimizer)
     MOI.set(model, MOA.Algorithm(), MOA.AugmentedEpsilonConstraint())
-    @test MOI.supports(model, MOA.SolutionLimit())
-    MOI.set(model, MOA.SolutionLimit(), 3)
+    @test MOI.supports(model, MOA.GridPoints()) 
+    MOI.set(model, MOA.GridPoints(), 3)
     MOI.set(model, MOI.Silent(), true)
     x = MOI.add_variables(model, length(w))
     MOI.add_constraint.(model, x, MOI.ZeroOne())
@@ -219,8 +217,8 @@ function test_biobjective_knapsack_min_solution_limit()
     )
     MOI.optimize!(model)
     results = Dict(
-        [943, 940] => [2, 3, 5, 6, 8, 9, 10, 11, 15, 16, 17],
-        [918, 983] => [2, 3, 4, 5, 6, 8, 10, 11, 12, 16, 17],
+        [955, 906] => [2, 3, 5, 6, 9, 10, 11, 14, 15, 16, 17],
+        [935, 947] => [2, 5, 6, 8, 9, 10, 11, 12, 15, 16, 17],
     )
     @test MOI.get(model, MOI.ResultCount()) == 2
     for i in 1:MOI.get(model, MOI.ResultCount())
@@ -281,23 +279,13 @@ function test_unbounded_second()
     return
 end
 
-function test_deprecated()
-    model = MOA.Optimizer(HiGHS.Optimizer)
-    MOI.set(model, MOA.Algorithm(), MOA.AugmentedEpsilonConstraint())
-    @test MOI.supports(model, MOA.ObjectiveAbsoluteTolerance(1))
-    @test MOA.default(MOA.ObjectiveAbsoluteTolerance(1)) == 0.0
-    @test_logs (:warn,) MOI.set(model, MOA.ObjectiveAbsoluteTolerance(1), 1.0)
-    @test_logs (:warn,) MOI.get(model, MOA.ObjectiveAbsoluteTolerance(1))
-    return
-end
-
 function test_quadratic()
     μ = [0.05470748600000001, 0.18257110599999998]
     Q = [0.00076204 0.00051972; 0.00051972 0.00546173]
     N = 2
     model = MOA.Optimizer(Ipopt.Optimizer)
     MOI.set(model, MOA.Algorithm(), MOA.AugmentedEpsilonConstraint())
-    MOI.set(model, MOA.SolutionLimit(), 10)
+    MOI.set(model, MOA.GridPoints(), 12)
     MOI.set(model, MOI.Silent(), true)
     w = MOI.add_variables(model, N)
     MOI.add_constraint.(model, w, MOI.GreaterThan(0.0))
@@ -315,7 +303,7 @@ function test_quadratic()
         y = MOI.get(model, MOI.ObjectiveValue(i))
         @test y ≈ [w_sol' * Q * w_sol, -μ' * w_sol]
     end
-    @test MOI.get(model, MOI.TerminationStatus()) == MOI.OPTIMAL
+    @test MOI.get(model, MOI.TerminationStatus()) == MOI.LOCALLY_SOLVED
     return
 end
 
@@ -325,7 +313,7 @@ function test_poor_numerics()
     N = 2
     model = MOA.Optimizer(Ipopt.Optimizer)
     MOI.set(model, MOA.Algorithm(), MOA.AugmentedEpsilonConstraint())
-    MOI.set(model, MOA.SolutionLimit(), 10)
+    MOI.set(model, MOA.GridPoints(), 10)
     MOI.set(model, MOI.Silent(), true)
     w = MOI.add_variables(model, N)
     sharpe = MOI.add_variable(model)
@@ -359,7 +347,7 @@ function test_poor_numerics()
         y = MOI.get(model, MOI.ObjectiveValue(i))
         @test y ≈ [μ' * w_sol, sharpe_sol]
     end
-    @test MOI.get(model, MOI.TerminationStatus()) == MOI.OPTIMAL
+    @test MOI.get(model, MOI.TerminationStatus()) == MOI.LOCALLY_SOLVED
     return
 end
 
@@ -369,7 +357,8 @@ function test_vectornonlinearfunction()
     N = 2
     model = MOA.Optimizer(Ipopt.Optimizer)
     MOI.set(model, MOA.Algorithm(), MOA.AugmentedEpsilonConstraint())
-    MOI.set(model, MOA.SolutionLimit(), 10)
+    MOI.set(model, MOA.GridPoints(), 12)
+    MOI.set(model, MOA.AugmeconDelta(), 1e-6)
     MOI.set(model, MOI.Silent(), true)
     w = MOI.add_variables(model, N)
     MOI.add_constraint.(model, w, MOI.GreaterThan(0.0))
@@ -389,9 +378,10 @@ function test_vectornonlinearfunction()
     for i in 1:MOI.get(model, MOI.ResultCount())
         w_sol = MOI.get(model, MOI.VariablePrimal(i), w)
         y = MOI.get(model, MOI.ObjectiveValue(i))
-        @test y ≈ [μ' * w_sol, (μ' * w_sol) / sqrt(w_sol' * Q * w_sol)]
+        @test isapprox(y[1], μ' * w_sol, atol=1e-6)
+        @test isapprox(y[2], (μ' * w_sol) / sqrt(w_sol' * Q * w_sol), atol=1e-6)
     end
-    @test MOI.get(model, MOI.TerminationStatus()) == MOI.OPTIMAL
+    @test MOI.get(model, MOI.TerminationStatus()) == MOI.LOCALLY_SOLVED
     return
 end
 

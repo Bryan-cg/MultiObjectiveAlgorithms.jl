@@ -349,6 +349,16 @@ struct AugmeconDelta <: AbstractAlgorithmAttribute end
 
 default(::AugmeconDelta) = 1e-3
 
+"""
+    GridPoints <: AbstractAlgorithmAttribute -> Int
+
+The number of grid points used in the Augmented Epsilon-Constraint method.  
+
+Defaults to `10`.
+"""
+struct GridPoints <: AbstractAlgorithmAttribute end
+
+default(::GridPoints) = 100
 
 """
     LexicographicAllPermutations <: AbstractAlgorithmAttribute -> Bool
