@@ -11,9 +11,8 @@ Implements the augmented epsilon-constraint method (AUGMECON) for bi-objective o
 mutable struct AugmentedEpsilonConstraint <: AbstractAlgorithm
     grid_points::Union{Nothing,Int}
     delta::Union{Nothing,Float64} # Penalty factor for slack variables
-    slack_vars::Vector{MOI.VariableIndex}  # Slack variables for equality constraints
 
-    AugmentedEpsilonConstraint() = new(nothing, nothing, MOI.VariableIndex[])
+    AugmentedEpsilonConstraint() = new(nothing, nothing)
 end
 
 MOI.supports(::AugmentedEpsilonConstraint, ::GridPoints) = true
