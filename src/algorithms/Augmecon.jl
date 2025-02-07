@@ -66,26 +66,14 @@ function optimize_multiobjective!(
     delta = MOI.get(algorithm, AugmeconDelta())
     sense = MOI.get(model.inner, MOI.ObjectiveSense())
 
-    # Convert to maximization and determine epsilon range
-    if sense == MOI.MIN_SENSE
-        # Original problem is minimization; convert objectives to maximization
-        f1_orig, f2_orig = MOI.Utilities.eachscalar(model.f)
-        f1 = MOI.Utilities.operate!(*, Float64, -1.0, f1_orig)
-        f2 = MOI.Utilities.operate!(*, Float64, 1.0, f2_orig)
-        # Payoff table values are original (minimization) objectives
-        epsilon_min = -min(payoff_table[2, 1], payoff_table[2, 2])  # Convert to maximization's f2'
-        epsilon_max = -max(payoff_table[2, 1], payoff_table[2, 2])
-    else
-        f1, f2 = MOI.Utilities.eachscalar(model.f)
-        epsilon_min = min(payoff_table[2, 1], payoff_table[2, 2])
-        epsilon_max = max(payoff_table[2, 1], payoff_table[2, 2])
-    end
+    f1, f2 = MOI.Utilities.eachscalar(model.f)
+    epsilon_min = min(payoff_table[2, 1], payoff_table[2, 2])
+    epsilon_max = max(payoff_table[2, 1], payoff_table[2, 2])
 
     r = abs(epsilon_max - epsilon_min)
     epsilon_step = r / (n_points - 1)
     current_epsilon = epsilon_min 
 
-    # Add slack variable
     slack = MOI.add_variable(model.inner)
     MOI.add_constraint(model.inner, slack, MOI.GreaterThan(0.0))
 
@@ -94,7 +82,7 @@ function optimize_multiobjective!(
     augmented_obj = sense == MOI.MIN_SENSE ? MOI.Utilities.operate!(-, Float64, f1, scaled_slack) : MOI.Utilities.operate!(+, Float64, f1, scaled_slack)
     MOI.set(model.inner, MOI.ObjectiveFunction{typeof(augmented_obj)}(), augmented_obj)
 
-    # Add epsilon constraint: f2 - slack == epsilon (for maximization)
+    # Add epsilon constraint: f2 - slack == epsilon 
     constraint_func = sense == MOI.MIN_SENSE ? MOI.Utilities.operate(+, Float64, f2, slack) : MOI.Utilities.operate(-, Float64, f2, slack)
     ci = MOI.add_constraint(model.inner, constraint_func, MOI.EqualTo(current_epsilon))
 
@@ -135,7 +123,6 @@ function convert_min_to_max!(model::MOI.AbstractOptimizer)
     if sense == MOI.MIN_SENSE
         MOI.set(model, MOI.ObjectiveSense(), MOI.MAX_SENSE)
         
-        # Negate the objective function to maintain the same optimization problem
         obj_func = MOI.get(model, MOI.ObjectiveFunction{MOI.ScalarAffineFunction{Float64}}())
         neg_obj_func = MOI.Utilities.operate!(*, Float64, -1.0, obj_func)
         MOI.set(model, MOI.ObjectiveFunction{typeof(neg_obj_func)}(), neg_obj_func)
